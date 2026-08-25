@@ -1,7 +1,22 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from app.database import driver
 
 app = FastAPI(title="FinGraph API")
+
+# CORS - allow frontend to call the API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.on_event("shutdown")
+def shutdown():
+    driver.close()
 
 
 @app.get("/")
@@ -29,7 +44,7 @@ def db_test():
             }
 
     except Exception as e:
-        return {"error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # Dashboard statistics API
@@ -62,7 +77,7 @@ def get_stats():
             }
 
     except Exception as e:
-        return {"error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
 # Latest transactions API
 @app.get('/transactions')
@@ -145,7 +160,7 @@ def get_transactions(
             }
 
     except Exception as e:
-        return {'error': str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get('/fraud-summary')
 def get_fraud_summary():
@@ -184,7 +199,7 @@ def get_fraud_summary():
             }
 
     except Exception as e:
-        return {'error': str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 @app.get('/merchant-analytics')
 def get_merchant_analytics():
     try:
@@ -209,7 +224,7 @@ def get_merchant_analytics():
             }
 
     except Exception as e:
-        return {'error': str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get('/location-analytics')
 def get_location_analytics():
@@ -235,29 +250,4 @@ def get_location_analytics():
             }
 
     except Exception as e:
-        return {'error': str(e)}
-@app.get('/location-analytics')
-def get_location_analytics():
-    try:
-        with driver.session() as session:
-
-            result = session.run(
-                '''
-                MATCH (t:Transaction)-[:IN_LOCATION]->(l:Location)
-                RETURN
-                    l.city AS city,
-                    count(t) AS total_transactions,
-                    sum(CASE WHEN t.fraud_label <> 'normal' THEN 1 ELSE 0 END) AS suspicious_transactions
-                ORDER BY total_transactions DESC
-                '''
-            )
-
-            locations = [dict(record) for record in result]
-
-            return {
-                'count': len(locations),
-                'locations': locations
-            }
-
-    except Exception as e:
-        return {'error': str(e)}
+        raise HTTPException(status_code=500, detail=str(e))

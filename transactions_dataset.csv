@@ -1,4 +1,4 @@
-transaction_id,transaction_id,transaction_id,transaction_id,transaction_id,transaction_id,transaction_id,transaction_id,transaction_id,transaction_id,transaction_id,transaction_id,transaction_id,transaction_id,transaction_id
+txn_id,txn_datetime,customer_account,card_no,txn_amount,txn_currency,merchant_type,city,country_code,payment_channel,km_from_home,foreign_txn_flag,txn_count_past_hour,fraud_label,risk_index
 e5e1abd3-5643-4a56-b1e3-3bfb1aa532f4,5/19/2026 15:55,ACC38740,4475-XXXX-XXXX-4409,58.91,USD,Healthcare,Los Angeles,US,Mobile App,2.1,0,0,normal,0.046
 f0f57be2-6023-4cdf-8397-393a4afae304,6/13/2026 14:11,ACC58473,4488-XXXX-XXXX-2785,19.96,USD,Grocery,London,GB,Mobile App,13.3,0,1,normal,0.244
 a9d8374a-be5e-45c9-9a5f-cf4b61f1a7b2,7/10/2026 16:19,ACC82413,4109-XXXX-XXXX-1255,30.05,USD,Coffee Shop,Tokyo,JP,Mobile App,9.6,0,0,normal,0.045
