@@ -21,7 +21,7 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
 
   neo4j:
-    image: neo4j:5.28.0
+    image: neo4j:5-community
     container_name: neo4j-fingraph
     ports:
       - "7474:7474"
