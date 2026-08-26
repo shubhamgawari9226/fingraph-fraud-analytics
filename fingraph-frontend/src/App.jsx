@@ -368,6 +368,8 @@ function App() {
         ) : location.pathname === "/investigation-details" ? (
 
           <InvestigationDetails />
+          ) : location.pathname === "/settings" ? (
+             <Settings />
 
         ) : (
 
