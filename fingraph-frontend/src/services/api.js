@@ -1,18 +1,18 @@
-const API_BASE_URL = "http://localhost:8000";
+const API_BASE_URL = "http://127.0.0.1:8000";
 
 export async function getStats() {
   const response = await fetch(`${API_BASE_URL}/stats`);
 
   if (!response.ok) {
-    throw new Error("Failed to fetch stats");
+    throw new Error("Failed to fetch statistics");
   }
 
   return response.json();
 }
 
-export async function getTransactions() {
+export async function getTransactions(limit = 5) {
   const response = await fetch(
-    `${API_BASE_URL}/transactions`
+    `${API_BASE_URL}/transactions?limit=${limit}`
   );
 
   if (!response.ok) {
@@ -22,9 +22,9 @@ export async function getTransactions() {
   return response.json();
 }
 
-export async function getFraudAnalytics() {
+export async function getFraudAnalytics(limit = 5) {
   const response = await fetch(
-    `${API_BASE_URL}/fraud-analytics`
+    `${API_BASE_URL}/fraud-analytics?limit=${limit}`
   );
 
   if (!response.ok) {
