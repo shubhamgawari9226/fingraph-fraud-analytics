@@ -132,7 +132,9 @@ function Dashboard() {
 
         <div className="stat-card">
           <span>🚨 Active Alerts</span>
+
           <h2>24</h2>
+
           <small>+12% today</small>
         </div>
 
@@ -149,7 +151,9 @@ function Dashboard() {
               : "—"}
           </h2>
 
-          <small>Backend statistics</small>
+          <small>
+            Total transactions
+          </small>
         </div>
 
         <div className="stat-card">
@@ -165,7 +169,9 @@ function Dashboard() {
               : "—"}
           </h2>
 
-          <small>Fraud transactions</small>
+          <small>
+            Fraud transactions
+          </small>
         </div>
 
         <div className="stat-card">
@@ -181,7 +187,9 @@ function Dashboard() {
               : "—"}
           </h2>
 
-          <small>Priority transactions</small>
+          <small>
+            Priority transactions
+          </small>
         </div>
 
       </section>

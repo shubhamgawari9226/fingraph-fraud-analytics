@@ -1,4 +1,5 @@
-const API_BASE_URL = "http://127.0.0.1:8000";
+const API_BASE_URL =
+  "https://corn-guidance-penguin-probe.trycloudflare.com";
 
 export async function getStats() {
   const response = await fetch(`${API_BASE_URL}/stats`);
