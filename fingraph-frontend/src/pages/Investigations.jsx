@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { getFraudAnalytics } from "../services/api";
 
 function Investigations() {
   // =========================
@@ -17,6 +18,12 @@ function Investigations() {
   const [search, setSearch] = useState("");
   const [riskFilter, setRiskFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
+
+  // =========================
+  // API STATE
+  // =========================
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   // =========================
   // NEW INVESTIGATION FORM
@@ -60,44 +67,178 @@ function Investigations() {
   ];
 
   // =========================
-  // LOAD CASES
+  // CASES STATE
   // =========================
-  const [cases, setCases] = useState(() => {
-    try {
-      const savedCases =
-        localStorage.getItem("investigations");
+  const [cases, setCases] = useState(defaultCases);
 
-      if (savedCases) {
-        return JSON.parse(savedCases);
+  // =========================
+  // FORMAT AMOUNT
+  // =========================
+  const formatAmount = (amount, currency = "INR") => {
+    const numericAmount = Number(amount);
+
+    if (Number.isNaN(numericAmount)) {
+      return amount || "-";
+    }
+
+    if (currency === "INR") {
+      return `₹${numericAmount.toLocaleString("en-IN")}`;
+    }
+
+    return `${currency} ${numericAmount.toLocaleString()}`;
+  };
+
+  // =========================
+  // GET RISK LEVEL
+  // =========================
+  const getRiskLevel = (riskIndex) => {
+    const value = Number(riskIndex);
+
+    if (Number.isNaN(value)) {
+      return "Medium";
+    }
+
+    if (value >= 0.7) {
+      return "High";
+    }
+
+    if (value >= 0.4) {
+      return "Medium";
+    }
+
+    return "Low";
+  };
+
+  // =========================
+  // GET INVESTIGATION STATUS
+  // =========================
+  const getInvestigationStatus = (risk, fraudLabel) => {
+    const label = String(fraudLabel || "").toLowerCase();
+
+    if (
+      label.includes("fraud") ||
+      label.includes("suspicious")
+    ) {
+      if (risk === "High") {
+        return "Investigating";
       }
 
-      return defaultCases;
-    } catch (error) {
-      console.error(
-        "Error loading investigations:",
-        error
-      );
-
-      return defaultCases;
+      return "Open";
     }
-  });
+
+    if (risk === "High") {
+      return "Review";
+    }
+
+    return "Open";
+  };
+
+  // =========================
+  // LOAD INVESTIGATIONS
+  // =========================
+  useEffect(() => {
+    const loadInvestigations = async () => {
+      try {
+        setLoading(true);
+        setError("");
+
+        const response = await getFraudAnalytics(50);
+
+        let transactions = [];
+
+        if (Array.isArray(response)) {
+          transactions = response;
+        } else if (Array.isArray(response?.data)) {
+          transactions = response.data;
+        } else if (
+          Array.isArray(response?.transactions)
+        ) {
+          transactions = response.transactions;
+        } else if (
+          Array.isArray(response?.results)
+        ) {
+          transactions = response.results;
+        }
+
+        if (transactions.length === 0) {
+          setCases(defaultCases);
+          return;
+        }
+
+        const investigationCases = transactions.map(
+          (transaction, index) => {
+            const risk = getRiskLevel(
+              transaction.risk_index
+            );
+
+            const status = getInvestigationStatus(
+              risk,
+              transaction.fraud_label
+            );
+
+            return {
+              id: `INV-${1001 + index}`,
+
+              transaction:
+                transaction.txn_id ||
+                transaction.transaction_id ||
+                `TXN-${1001 + index}`,
+
+              customer:
+                transaction.account_id ||
+                transaction.customer_id ||
+                transaction.customer_name ||
+                "Unknown Customer",
+
+              amount: formatAmount(
+                transaction.amount,
+                transaction.currency
+              ),
+
+              risk,
+              status,
+            };
+          }
+        );
+
+        setCases(investigationCases);
+      } catch (err) {
+        console.error(
+          "Error loading investigations:",
+          err
+        );
+
+        setError(
+          "Unable to load investigation data from backend."
+        );
+
+        setCases(defaultCases);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadInvestigations();
+  }, []);
 
   // =========================
   // SAVE CASES
   // =========================
   useEffect(() => {
-    try {
-      localStorage.setItem(
-        "investigations",
-        JSON.stringify(cases)
-      );
-    } catch (error) {
-      console.error(
-        "Error saving investigations:",
-        error
-      );
+    if (!loading) {
+      try {
+        localStorage.setItem(
+          "investigations",
+          JSON.stringify(cases)
+        );
+      } catch (error) {
+        console.error(
+          "Error saving investigations:",
+          error
+        );
+      }
     }
-  }, [cases]);
+  }, [cases, loading]);
 
   // =========================
   // CREATE INVESTIGATION
@@ -693,7 +834,29 @@ function Investigations() {
 
             <tbody>
 
-              {filteredCases.length > 0 ? (
+              {loading ? (
+
+                <tr>
+                  <td
+                    colSpan="7"
+                    className="no-investigations"
+                  >
+                    Loading investigations...
+                  </td>
+                </tr>
+
+              ) : error ? (
+
+                <tr>
+                  <td
+                    colSpan="7"
+                    className="no-investigations"
+                  >
+                    {error}
+                  </td>
+                </tr>
+
+              ) : filteredCases.length > 0 ? (
 
                 filteredCases.map((item) => (
 
