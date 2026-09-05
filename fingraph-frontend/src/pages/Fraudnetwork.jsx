@@ -1,560 +1,1727 @@
-import { useState } from "react";
+import React, {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+
+import { getFraudNetwork } from "../services/api";
+
+// ======================================================
+// HELPERS
+// ======================================================
+
+const safeString = (value, fallback = "") => {
+  if (value === null || value === undefined) {
+    return fallback;
+  }
+
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return fallback;
+    }
+  }
+
+  return String(value);
+};
+
+// ======================================================
+// NORMALIZE NODE ID
+// ======================================================
+
+const normalizeId = (node, index) => {
+  const id =
+    node?.id ??
+    node?.node_id ??
+    node?.account_id ??
+    node?.transaction_id ??
+    node?.merchant_id ??
+    node?.location_id ??
+    `NODE-${index + 1}`;
+
+  return safeString(id, `NODE-${index + 1}`);
+};
+
+// ======================================================
+// NORMALIZE NODE TYPE
+// ======================================================
+
+const normalizeNodeType = (node) => {
+  const type =
+    node?.type ??
+    node?.node_type ??
+    node?.entity_type ??
+    node?.kind ??
+    "unknown";
+
+  return safeString(type).toLowerCase();
+};
+
+// ======================================================
+// RISK LEVEL
+// ======================================================
+
+const getRiskLevelFromNode = (node) => {
+  const tier = safeString(
+    node?.risk_tier ??
+      node?.risk_level ??
+      node?.risk ??
+      ""
+  ).toUpperCase();
+
+  if (
+    tier === "HIGH" ||
+    tier === "HIGH RISK"
+  ) {
+    return "High";
+  }
+
+  if (
+    tier === "MEDIUM" ||
+    tier === "MED" ||
+    tier === "MEDIUM RISK"
+  ) {
+    return "Medium";
+  }
+
+  if (
+    tier === "LOW" ||
+    tier === "LOW RISK"
+  ) {
+    return "Low";
+  }
+
+  // --------------------------------------------------
+  // Risk Index
+  // --------------------------------------------------
+
+  const riskIndex = Number(
+    node?.risk_index
+  );
+
+  if (Number.isFinite(riskIndex)) {
+    if (riskIndex >= 0.7) {
+      return "High";
+    }
+
+    if (riskIndex >= 0.4) {
+      return "Medium";
+    }
+
+    return "Low";
+  }
+
+  // --------------------------------------------------
+  // Risk Score
+  // --------------------------------------------------
+
+  const riskScore = Number(
+    node?.risk_score ??
+      node?.riskScore ??
+      node?.score
+  );
+
+  if (Number.isFinite(riskScore)) {
+    if (riskScore >= 70) {
+      return "High";
+    }
+
+    if (riskScore >= 40) {
+      return "Medium";
+    }
+
+    return "Low";
+  }
+
+  return "Low";
+};
+
+// ======================================================
+// NODE POSITION
+// ======================================================
+
+const getNodePosition = (
+  index,
+  total
+) => {
+  const centerX = 450;
+  const centerY = 300;
+
+  if (index === 0) {
+    return {
+      x: centerX,
+      y: centerY,
+    };
+  }
+
+  const count = Math.max(
+    total - 1,
+    1
+  );
+
+  const angle =
+    ((index - 1) / count) *
+    Math.PI *
+    2;
+
+  let radius = 190;
+
+  if (
+    total > 10 &&
+    total <= 20
+  ) {
+    radius = 220;
+  }
+
+  if (total > 20) {
+    radius = 245;
+  }
+
+  return {
+    x:
+      centerX +
+      Math.cos(angle) * radius,
+
+    y:
+      centerY +
+      Math.sin(angle) * radius,
+  };
+};
+
+// ======================================================
+// COMPONENT
+// ======================================================
 
 function FraudNetwork() {
-  const [selectedNode, setSelectedNode] = useState(null);
-  const [search, setSearch] = useState("");
+  const [nodes, setNodes] = useState([]);
 
-  // =========================
-  // FRAUD NETWORK NODES
-  // =========================
-  const nodes = [
-    {
-      id: "CUST-001",
-      label: "Customer A",
-      type: "Customer",
-      risk: "High",
-      x: 180,
-      y: 170,
-    },
-    {
-      id: "CUST-002",
-      label: "Customer B",
-      type: "Customer",
-      risk: "Medium",
-      x: 480,
-      y: 120,
-    },
-    {
-      id: "CUST-003",
-      label: "Customer C",
-      type: "Customer",
-      risk: "Low",
-      x: 720,
-      y: 210,
-    },
-    {
-      id: "CUST-004",
-      label: "Customer D",
-      type: "Customer",
-      risk: "High",
-      x: 600,
-      y: 430,
-    },
-    {
-      id: "TXN-78421",
-      label: "₹2.4L",
-      type: "Transaction",
-      risk: "High",
-      x: 330,
-      y: 300,
-    },
-    {
-      id: "TXN-78435",
-      label: "₹85K",
-      type: "Transaction",
-      risk: "Medium",
-      x: 560,
-      y: 270,
-    },
-    {
-      id: "TXN-78456",
-      label: "₹42K",
-      type: "Transaction",
-      risk: "Low",
-      x: 420,
-      y: 470,
-    },
-  ];
+  const [connections, setConnections] =
+    useState([]);
 
-  // =========================
-  // CONNECTIONS
-  // =========================
-  const connections = [
-    {
-      from: "CUST-001",
-      to: "TXN-78421",
-      label: "Initiated",
-    },
-    {
-      from: "CUST-002",
-      to: "TXN-78421",
-      label: "Linked",
-    },
-    {
-      from: "CUST-002",
-      to: "TXN-78435",
-      label: "Initiated",
-    },
-    {
-      from: "CUST-003",
-      to: "TXN-78456",
-      label: "Initiated",
-    },
-    {
-      from: "CUST-004",
-      to: "TXN-78435",
-      label: "Linked",
-    },
-    {
-      from: "CUST-001",
-      to: "CUST-002",
-      label: "Shared Device",
-    },
-    {
-      from: "CUST-002",
-      to: "CUST-004",
-      label: "Shared Account",
-    },
-  ];
+  const [stats, setStats] =
+    useState({
+      total_nodes: 0,
+      total_edges: 0,
+    });
 
-  // =========================
-  // FIND NODE
-  // =========================
-  const getNode = (id) => {
-    return nodes.find((node) => node.id === id);
+  const [selectedNode, setSelectedNode] =
+    useState(null);
+
+  const [search, setSearch] =
+    useState("");
+
+  const [loading, setLoading] =
+    useState(true);
+
+  const [error, setError] =
+    useState("");
+
+  // ======================================================
+  // IMPORTANT
+  // Prevent React StrictMode duplicate API call
+  // ======================================================
+
+  const hasLoadedRef =
+    useRef(false);
+
+  // ======================================================
+  // LOAD FRAUD NETWORK
+  // ======================================================
+
+  useEffect(() => {
+    // ----------------------------------------------------
+    // React StrictMode can execute useEffect twice
+    // during development.
+    //
+    // Prevent the second API request.
+    // ----------------------------------------------------
+
+    if (hasLoadedRef.current) {
+      console.log(
+        "⚠️ Fraud Network API already requested - skipping duplicate call."
+      );
+
+      return;
+    }
+
+    hasLoadedRef.current = true;
+
+    let mounted = true;
+
+    const loadFraudNetwork =
+      async () => {
+        try {
+          setLoading(true);
+          setError("");
+
+          console.log(
+            "🔥 FRAUD NETWORK API CALL STARTED"
+          );
+
+          const data =
+            await getFraudNetwork(20);
+
+          console.log(
+            "🔥 FRAUD NETWORK DATA:",
+            data
+          );
+
+          if (!mounted) {
+            return;
+          }
+
+          // ==================================================
+          // VALIDATE RESPONSE
+          // ==================================================
+
+          if (
+            !data ||
+            typeof data !== "object"
+          ) {
+            throw new Error(
+              "Invalid fraud network response from backend."
+            );
+          }
+
+          // ==================================================
+          // NODES
+          // ==================================================
+
+          const backendNodes =
+            Array.isArray(data?.nodes)
+              ? data.nodes
+              : [];
+
+          // ==================================================
+          // EDGES
+          // ==================================================
+
+          const backendEdges =
+            Array.isArray(data?.edges)
+              ? data.edges
+              : [];
+
+          // ==================================================
+          // STATS
+          // ==================================================
+
+          const backendStats =
+            data?.stats &&
+            typeof data.stats === "object"
+              ? data.stats
+              : {};
+
+          // ==================================================
+          // FORMAT NODES
+          // ==================================================
+
+          const formattedNodes =
+            backendNodes.map(
+              (
+                node,
+                index
+              ) => {
+                const originalNode =
+                  node &&
+                  typeof node === "object"
+                    ? node
+                    : {};
+
+                const id =
+                  normalizeId(
+                    originalNode,
+                    index
+                  );
+
+                const type =
+                  normalizeNodeType(
+                    originalNode
+                  );
+
+                const position =
+                  getNodePosition(
+                    index,
+                    backendNodes.length
+                  );
+
+                const label =
+                  originalNode?.label ??
+                  originalNode?.name ??
+                  originalNode?.account_name ??
+                  originalNode?.transaction_id ??
+                  originalNode?.merchant_name ??
+                  originalNode?.location_name ??
+                  id;
+
+                return {
+                  ...originalNode,
+
+                  id,
+
+                  type,
+
+                  label: safeString(
+                    label,
+                    id
+                  ),
+
+                  x: position.x,
+
+                  y: position.y,
+
+                  risk:
+                    getRiskLevelFromNode(
+                      originalNode
+                    ),
+                };
+              }
+            );
+
+          // ==================================================
+          // FORMAT EDGES
+          // ==================================================
+
+          const formattedConnections =
+            backendEdges
+              .map(
+                (
+                  edge,
+                  index
+                ) => {
+                  if (
+                    !edge ||
+                    typeof edge !==
+                      "object"
+                  ) {
+                    return null;
+                  }
+
+                  const source =
+                    edge?.source ??
+                    edge?.from ??
+                    edge?.source_id ??
+                    edge?.from_id;
+
+                  const target =
+                    edge?.target ??
+                    edge?.to ??
+                    edge?.target_id ??
+                    edge?.to_id;
+
+                  if (
+                    source === null ||
+                    source === undefined ||
+                    target === null ||
+                    target === undefined
+                  ) {
+                    return null;
+                  }
+
+                  const sourceId =
+                    typeof source ===
+                    "object"
+                      ? source?.id ??
+                        source?.node_id ??
+                        source?.account_id ??
+                        source?.transaction_id ??
+                        source?.merchant_id ??
+                        source?.location_id
+                      : source;
+
+                  const targetId =
+                    typeof target ===
+                    "object"
+                      ? target?.id ??
+                        target?.node_id ??
+                        target?.account_id ??
+                        target?.transaction_id ??
+                        target?.merchant_id ??
+                        target?.location_id
+                      : target;
+
+                  if (
+                    sourceId ===
+                      null ||
+                    sourceId ===
+                      undefined ||
+                    targetId ===
+                      null ||
+                    targetId ===
+                      undefined
+                  ) {
+                    return null;
+                  }
+
+                  return {
+                    id: safeString(
+                      edge?.id,
+                      `EDGE-${index + 1}`
+                    ),
+
+                    from: safeString(
+                      sourceId
+                    ),
+
+                    to: safeString(
+                      targetId
+                    ),
+
+                    label: safeString(
+                      edge?.relationship ??
+                        edge?.relation ??
+                        edge?.label ??
+                        edge?.type ??
+                        "CONNECTED",
+                      "CONNECTED"
+                    ),
+                  };
+                }
+              )
+              .filter(Boolean);
+
+          // ==================================================
+          // SAVE DATA
+          // ==================================================
+
+          setNodes(
+            formattedNodes
+          );
+
+          setConnections(
+            formattedConnections
+          );
+
+          setStats({
+            total_nodes:
+              Number.isFinite(
+                Number(
+                  backendStats?.total_nodes
+                )
+              )
+                ? Number(
+                    backendStats?.total_nodes
+                  )
+                : formattedNodes.length,
+
+            total_edges:
+              Number.isFinite(
+                Number(
+                  backendStats?.total_edges
+                )
+              )
+                ? Number(
+                    backendStats?.total_edges
+                  )
+                : formattedConnections.length,
+          });
+
+          console.log(
+            "✅ NODES:",
+            formattedNodes.length
+          );
+
+          console.log(
+            "✅ CONNECTIONS:",
+            formattedConnections.length
+          );
+
+          // ==================================================
+          // SUCCESS
+          // ==================================================
+
+          setError("");
+        } catch (err) {
+          console.error(
+            "❌ FRAUD NETWORK ERROR:",
+            err
+          );
+
+          if (!mounted) {
+            return;
+          }
+
+          // ------------------------------------------------
+          // IMPORTANT:
+          // Don't destroy existing successful data.
+          // ------------------------------------------------
+
+          setError(
+            err?.message ||
+              "Unable to load fraud network data."
+          );
+
+          // Do NOT clear nodes/connections here.
+        } finally {
+          if (mounted) {
+            setLoading(false);
+          }
+        }
+      };
+
+    loadFraudNetwork();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  // ======================================================
+  // DISPLAY TYPE
+  // ======================================================
+
+  const getDisplayType = (
+    type
+  ) => {
+    switch (
+      safeString(type).toLowerCase()
+    ) {
+      case "account":
+      case "user":
+        return "Account";
+
+      case "transaction":
+      case "txn":
+        return "Transaction";
+
+      case "merchant":
+        return "Merchant";
+
+      case "location":
+      case "place":
+        return "Location";
+
+      default:
+        return "Unknown";
+    }
   };
 
-  // =========================
-  // SEARCH
-  // =========================
-  const filteredNodes = nodes.filter((node) => {
-    const searchText = search.toLowerCase();
+  // ======================================================
+  // ICON
+  // ======================================================
+
+  const getNodeIcon = (
+    type
+  ) => {
+    switch (
+      safeString(type).toLowerCase()
+    ) {
+      case "account":
+      case "user":
+        return "👤";
+
+      case "transaction":
+      case "txn":
+        return "₹";
+
+      case "merchant":
+        return "🏪";
+
+      case "location":
+      case "place":
+        return "📍";
+
+      default:
+        return "●";
+    }
+  };
+
+  // ======================================================
+  // RISK
+  // ======================================================
+
+  const getRiskLevel = (
+    node
+  ) => {
+    if (!node) {
+      return "Low";
+    }
 
     return (
-      node.id.toLowerCase().includes(searchText) ||
-      node.label.toLowerCase().includes(searchText) ||
-      node.type.toLowerCase().includes(searchText) ||
-      node.risk.toLowerCase().includes(searchText)
+      node.risk ||
+      getRiskLevelFromNode(node)
     );
-  });
-
-  // =========================
-  // NODE RADIUS
-  // =========================
-  const getRadius = (node) => {
-    return node.type === "Transaction" ? 30 : 38;
   };
 
-  // =========================
-  // NODE CLASS
-  // =========================
-  const getRiskClass = (risk) => {
+  // ======================================================
+  // COLOR
+  // ======================================================
+
+  const getNodeColor = (
+    node
+  ) => {
+    const risk =
+      getRiskLevel(node);
+
+    const type =
+      safeString(
+        node?.type
+      ).toLowerCase();
+
+    if (
+      type === "transaction" ||
+      type === "txn"
+    ) {
+      if (risk === "High") {
+        return "#f97316";
+      }
+
+      if (risk === "Medium") {
+        return "#eab308";
+      }
+
+      return "#06b6d4";
+    }
+
     if (risk === "High") {
-      return "network-high";
+      return "#ef4444";
     }
 
     if (risk === "Medium") {
-      return "network-medium";
+      return "#f59e0b";
     }
 
-    return "network-low";
+    return "#22c55e";
   };
 
-  // =========================
-  // NETWORK STATISTICS
-  // =========================
-  const customerCount = nodes.filter(
-    (node) => node.type === "Customer"
-  ).length;
+  // ======================================================
+  // RADIUS
+  // ======================================================
 
-  const transactionCount = nodes.filter(
-    (node) => node.type === "Transaction"
-  ).length;
+  const getRadius = (
+    node
+  ) => {
+    switch (
+      safeString(
+        node?.type
+      ).toLowerCase()
+    ) {
+      case "transaction":
+      case "txn":
+        return 30;
 
-  const highRiskCount = nodes.filter(
-    (node) => node.risk === "High"
-  ).length;
+      case "merchant":
+        return 36;
 
-  // =========================
-  // RETURN UI
-  // =========================
+      case "location":
+      case "place":
+        return 34;
+
+      default:
+        return 38;
+    }
+  };
+
+  // ======================================================
+  // GET NODE
+  // ======================================================
+
+  const getNode = (
+    id
+  ) => {
+    const normalizedId =
+      safeString(id);
+
+    return nodes.find(
+      (node) =>
+        safeString(node?.id) ===
+        normalizedId
+    );
+  };
+
+  // ======================================================
+  // SEARCH MATCH
+  // ======================================================
+
+  const isNodeSearchMatch =
+    (node) => {
+      const searchText =
+        search
+          .toLowerCase()
+          .trim();
+
+      if (!searchText) {
+        return false;
+      }
+
+      return (
+        safeString(
+          node?.id
+        )
+          .toLowerCase()
+          .includes(searchText) ||
+
+        safeString(
+          node?.label
+        )
+          .toLowerCase()
+          .includes(searchText) ||
+
+        safeString(
+          node?.type
+        )
+          .toLowerCase()
+          .includes(searchText) ||
+
+        safeString(
+          node?.risk_tier
+        )
+          .toLowerCase()
+          .includes(searchText) ||
+
+        safeString(
+          node?.fraud_label
+        )
+          .toLowerCase()
+          .includes(searchText)
+      );
+    };
+
+  // ======================================================
+  // FILTERED NODES
+  // ======================================================
+
+  const filteredNodes =
+    useMemo(() => {
+      const searchText =
+        search
+          .toLowerCase()
+          .trim();
+
+      if (!searchText) {
+        return nodes;
+      }
+
+      return nodes.filter(
+        (node) =>
+          isNodeSearchMatch(node)
+      );
+    }, [nodes, search]);
+
+  const filteredNodeIds =
+    useMemo(
+      () =>
+        new Set(
+          filteredNodes.map(
+            (node) => node.id
+          )
+        ),
+      [filteredNodes]
+    );
+
+  // ======================================================
+  // COUNTS
+  // ======================================================
+
+  const accountCount =
+    nodes.filter(
+      (node) => {
+        const type =
+          safeString(
+            node?.type
+          ).toLowerCase();
+
+        return (
+          type === "account" ||
+          type === "user"
+        );
+      }
+    ).length;
+
+  const transactionCount =
+    nodes.filter(
+      (node) => {
+        const type =
+          safeString(
+            node?.type
+          ).toLowerCase();
+
+        return (
+          type === "transaction" ||
+          type === "txn"
+        );
+      }
+    ).length;
+
+  const merchantCount =
+    nodes.filter(
+      (node) =>
+        safeString(
+          node?.type
+        ).toLowerCase() ===
+        "merchant"
+    ).length;
+
+  const locationCount =
+    nodes.filter(
+      (node) => {
+        const type =
+          safeString(
+            node?.type
+          ).toLowerCase();
+
+        return (
+          type === "location" ||
+          type === "place"
+        );
+      }
+    ).length;
+
+  const highRiskCount =
+    nodes.filter(
+      (node) =>
+        getRiskLevel(node) ===
+        "High"
+    ).length;
+
+  // ======================================================
+  // SELECTED CONNECTIONS
+  // ======================================================
+
+  const selectedNodeConnections =
+    selectedNode
+      ? connections.filter(
+          (connection) =>
+            safeString(
+              connection?.from
+            ) ===
+              safeString(
+                selectedNode?.id
+              ) ||
+            safeString(
+              connection?.to
+            ) ===
+              safeString(
+                selectedNode?.id
+              )
+        ).length
+      : 0;
+
+  // ======================================================
+  // RISK SCORE
+  // ======================================================
+
+  const formatRiskScore =
+    (node) => {
+      if (
+        node?.risk_score !==
+          undefined &&
+        node?.risk_score !== null
+      ) {
+        return safeString(
+          node.risk_score
+        );
+      }
+
+      if (
+        node?.risk_index !==
+          undefined &&
+        node?.risk_index !== null
+      ) {
+        const value =
+          Number(
+            node.risk_index
+          );
+
+        if (
+          Number.isFinite(value)
+        ) {
+          return value.toFixed(2);
+        }
+      }
+
+      return "-";
+    };
+
+  // ======================================================
+  // AMOUNT
+  // ======================================================
+
+  const formatAmount =
+    (amount) => {
+      if (
+        amount === undefined ||
+        amount === null
+      ) {
+        return null;
+      }
+
+      const numericAmount =
+        Number(amount);
+
+      if (
+        !Number.isFinite(
+          numericAmount
+        )
+      ) {
+        return safeString(
+          amount
+        );
+      }
+
+      return `₹${numericAmount.toLocaleString(
+        "en-IN",
+        {
+          maximumFractionDigits: 2,
+        }
+      )}`;
+    };
+
+  // ======================================================
+  // CONNECTION RISK
+  // ======================================================
+
+  const getConnectionRisk =
+    (
+      fromNode,
+      toNode
+    ) => {
+      if (
+        !fromNode ||
+        !toNode
+      ) {
+        return "Low";
+      }
+
+      const fromRisk =
+        getRiskLevel(
+          fromNode
+        );
+
+      const toRisk =
+        getRiskLevel(
+          toNode
+        );
+
+      if (
+        fromRisk === "High" ||
+        toRisk === "High"
+      ) {
+        return "High";
+      }
+
+      if (
+        fromRisk === "Medium" ||
+        toRisk === "Medium"
+      ) {
+        return "Medium";
+      }
+
+      return "Low";
+    };
+
+  // ======================================================
+  // CLEAR SELECTION
+  // ======================================================
+
+  const clearSelection =
+    () => {
+      setSelectedNode(null);
+    };
+
+  // ======================================================
+  // RENDER
+  // ======================================================
+
   return (
     <div className="page-container">
 
-      {/* =========================
-          PAGE HEADER
-      ========================== */}
+      {/* ==================================================
+          HEADER
+      ================================================== */}
+
       <div className="page-header">
 
         <div>
-          <h2>Fraud Network</h2>
+          <h2>
+            Fraud Network
+          </h2>
 
           <p>
-            Visualize connections between suspicious
-            accounts and transactions.
+            Visualize connections between
+            accounts, transactions,
+            merchants and locations.
           </p>
         </div>
 
         <div className="network-search">
+
           <input
             type="text"
-            placeholder="Search customer or transaction..."
+            placeholder="Search account or transaction..."
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(event) =>
+              setSearch(
+                event.target.value
+              )
+            }
             className="search-input"
           />
+
         </div>
 
       </div>
 
-      {/* =========================
-          NETWORK STATISTICS
-      ========================== */}
+      {/* ==================================================
+          ERROR
+      ================================================== */}
+
+      {error && (
+        <div
+          className="error-message"
+          style={{
+            marginBottom: "20px",
+            padding: "14px",
+            borderRadius: "10px",
+            background:
+              "rgba(239,68,68,0.12)",
+            color: "#ef4444",
+            border:
+              "1px solid rgba(239,68,68,0.3)",
+          }}
+        >
+          ❌ {error}
+        </div>
+      )}
+
+      {/* ==================================================
+          STATISTICS
+      ================================================== */}
+
       <div className="investigation-stats">
 
         <div className="info-card">
-          <span>👤 Accounts</span>
-          <h3>{customerCount}</h3>
-          <small>Connected accounts</small>
+
+          <span>
+            👤 Accounts
+          </span>
+
+          <h3>
+            {loading
+              ? "..."
+              : accountCount}
+          </h3>
+
+          <small>
+            Connected accounts
+          </small>
+
         </div>
 
         <div className="info-card">
-          <span>💳 Transactions</span>
-          <h3>{transactionCount}</h3>
-          <small>Linked transactions</small>
+
+          <span>
+            💳 Transactions
+          </span>
+
+          <h3>
+            {loading
+              ? "..."
+              : transactionCount}
+          </h3>
+
+          <small>
+            Linked transactions
+          </small>
+
         </div>
 
         <div className="info-card">
-          <span>⚠️ High Risk</span>
-          <h3>{highRiskCount}</h3>
-          <small>Priority nodes</small>
+
+          <span>
+            🏪 Merchants
+          </span>
+
+          <h3>
+            {loading
+              ? "..."
+              : merchantCount}
+          </h3>
+
+          <small>
+            Connected merchants
+          </small>
+
+        </div>
+
+        <div className="info-card">
+
+          <span>
+            ⚠️ High Risk
+          </span>
+
+          <h3>
+            {loading
+              ? "..."
+              : highRiskCount}
+          </h3>
+
+          <small>
+            Priority nodes
+          </small>
+
         </div>
 
       </div>
 
-      {/* =========================
-          MAIN NETWORK AREA
-      ========================== */}
+      {/* ==================================================
+          SUMMARY
+      ================================================== */}
+
+      {!loading && (
+        <div className="network-summary">
+
+          <span>
+            Total Nodes:{" "}
+            <strong>
+              {stats.total_nodes}
+            </strong>
+          </span>
+
+          <span>
+            Total Connections:{" "}
+            <strong>
+              {stats.total_edges}
+            </strong>
+          </span>
+
+          <span>
+            Locations:{" "}
+            <strong>
+              {locationCount}
+            </strong>
+          </span>
+
+        </div>
+      )}
+
+      {/* ==================================================
+          MAIN NETWORK
+      ================================================== */}
+
       <div className="network-layout">
 
-        {/* =========================
-            NETWORK GRAPH
-        ========================== */}
+        {/* ==================================================
+            GRAPH
+        ================================================== */}
+
         <div className="investigation-panel network-panel">
 
           <div className="panel-header">
+
             <div>
-              <h3>Fraud Connection Network</h3>
+
+              <h3>
+                Fraud Connection Network
+              </h3>
 
               <small>
                 Click any node to view details
               </small>
+
             </div>
+
           </div>
 
           <div className="network-graph">
 
-           <svg
-  viewBox="0 0 900 600"
-  className="fraud-network-svg"
-  role="img"
-  aria-label="Fraud connection network"
->
-  <defs>
-    <linearGradient
-      id="networkBackground"
-      x1="0"
-      y1="0"
-      x2="1"
-      y2="1"
-    >
-      <stop offset="0%" stopColor="#0b1220" />
-      <stop offset="100%" stopColor="#111827" />
-    </linearGradient>
+            {loading ? (
+              <div className="network-loading">
 
-    <filter
-      id="nodeGlow"
-      x="-50%"
-      y="-50%"
-      width="200%"
-      height="200%"
-    >
-      <feGaussianBlur
-        stdDeviation="5"
-        result="blur"
-      />
-      <feMerge>
-        <feMergeNode in="blur" />
-        <feMergeNode in="SourceGraphic" />
-      </feMerge>
-    </filter>
+                <div>
 
-    <pattern
-      id="networkGrid"
-      width="40"
-      height="40"
-      patternUnits="userSpaceOnUse"
-    >
-      <path
-        d="M 40 0 L 0 0 0 40"
-        fill="none"
-        stroke="#334155"
-        strokeWidth="1"
-        opacity="0.25"
-      />
-    </pattern>
-  </defs>
+                  <div className="empty-node-icon">
+                    🕸️
+                  </div>
 
-  {/* Network background */}
-  <rect
-    x="0"
-    y="0"
-    width="900"
-    height="600"
-    rx="18"
-    fill="url(#networkBackground)"
-  />
+                  <h3>
+                    Loading fraud network...
+                  </h3>
 
-  {/* Network grid */}
-  <rect
-    x="0"
-    y="0"
-    width="900"
-    height="600"
-    rx="18"
-    fill="url(#networkGrid)"
-  />
+                  <p>
+                    Fetching network data
+                    from backend.
+                  </p>
 
-  {/* Connection lines */}
-  {connections.map((connection, index) => {
-    const fromNode = getNode(connection.from);
-    const toNode = getNode(connection.to);
+                </div>
 
-    if (!fromNode || !toNode) {
-      return null;
-    }
+              </div>
+            ) : nodes.length === 0 ? (
+              <div className="network-loading">
 
-    const searchText = search.toLowerCase();
+                <div>
 
-    const isSearchMatch =
-      searchText &&
-      (
-        fromNode.id.toLowerCase().includes(searchText) ||
-        fromNode.label.toLowerCase().includes(searchText) ||
-        toNode.id.toLowerCase().includes(searchText) ||
-        toNode.label.toLowerCase().includes(searchText)
-      );
+                  <div className="empty-node-icon">
+                    🔍
+                  </div>
 
-    const isSelectedConnection =
-      selectedNode &&
-      (
-        connection.from === selectedNode.id ||
-        connection.to === selectedNode.id
-      );
+                  <h3>
+                    No network data
+                  </h3>
 
-    return (
-      <g
-        key={`${connection.from}-${connection.to}-${index}`}
-      >
-        <line
-          x1={fromNode.x}
-          y1={fromNode.y}
-          x2={toNode.x}
-          y2={toNode.y}
-          stroke={
-            isSelectedConnection
-              ? "#38bdf8"
-              : isSearchMatch
-              ? "#facc15"
-              : "#475569"
-          }
-          strokeWidth={
-            isSelectedConnection || isSearchMatch
-              ? 5
-              : 2.5
-          }
-          strokeLinecap="round"
-          opacity={
-            search && !isSearchMatch
-              ? 0.25
-              : 0.85
-          }
-        />
+                  <p>
+                    The backend returned
+                    no network nodes.
+                  </p>
 
-        {/* Connection direction point */}
-        <circle
-          cx={(fromNode.x + toNode.x) / 2}
-          cy={(fromNode.y + toNode.y) / 2}
-          r="4"
-          fill={
-            isSelectedConnection
-              ? "#38bdf8"
-              : "#64748b"
-          }
-          opacity="0.9"
-        />
-      </g>
-    );
-  })}
+                </div>
 
-  {/* Nodes */}
-  {nodes.map((node) => {
-    const isVisible =
-      search === "" ||
-      filteredNodes.some(
-        (item) => item.id === node.id
-      );
+              </div>
+            ) : (
+              <svg
+                viewBox="0 0 900 600"
+                className="fraud-network-svg"
+                role="img"
+                aria-label="Fraud connection network"
+              >
 
-    const isSelected =
-      selectedNode?.id === node.id;
+                {/* ==================================================
+                    DEFINITIONS
+                ================================================== */}
 
-    const isSearchMatch =
-      search &&
-      (
-        node.id
-          .toLowerCase()
-          .includes(search.toLowerCase()) ||
-        node.label
-          .toLowerCase()
-          .includes(search.toLowerCase()) ||
-        node.type
-          .toLowerCase()
-          .includes(search.toLowerCase()) ||
-        node.risk
-          .toLowerCase()
-          .includes(search.toLowerCase())
-      );
+                <defs>
 
-    if (!isVisible) {
-      return null;
-    }
+                  <linearGradient
+                    id="networkBackground"
+                    x1="0"
+                    y1="0"
+                    x2="1"
+                    y2="1"
+                  >
 
-    let nodeColor = "#22c55e";
+                    <stop
+                      offset="0%"
+                      stopColor="#0b1220"
+                    />
 
-    if (node.risk === "High") {
-      nodeColor = "#ef4444";
-    } else if (node.risk === "Medium") {
-      nodeColor = "#f59e0b";
-    }
+                    <stop
+                      offset="100%"
+                      stopColor="#111827"
+                    />
 
-    if (node.type === "Transaction") {
-      nodeColor =
-        node.risk === "High"
-          ? "#f97316"
-          : node.risk === "Medium"
-          ? "#eab308"
-          : "#06b6d4";
-    }
+                  </linearGradient>
 
-    return (
-      <g
-        key={node.id}
-        onClick={() => setSelectedNode(node)}
-        style={{
-          cursor: "pointer",
-          opacity:
-            search && !isSearchMatch
-              ? 0.35
-              : 1,
-        }}
-      >
-        {/* Selected node outer ring */}
-        {isSelected && (
-          <circle
-            cx={node.x}
-            cy={node.y}
-            r={node.type === "Transaction" ? 45 : 55}
-            fill="none"
-            stroke="#38bdf8"
-            strokeWidth="4"
-            opacity="0.9"
-            filter="url(#nodeGlow)"
-          />
-        )}
+                  <filter
+                    id="nodeGlow"
+                    x="-50%"
+                    y="-50%"
+                    width="200%"
+                    height="200%"
+                  >
 
-        {/* Search highlight */}
-        {isSearchMatch && (
-          <circle
-            cx={node.x}
-            cy={node.y}
-            r={node.type === "Transaction" ? 42 : 50}
-            fill="none"
-            stroke="#facc15"
-            strokeWidth="3"
-            strokeDasharray="7 5"
-          />
-        )}
+                    <feGaussianBlur
+                      stdDeviation="5"
+                      result="blur"
+                    />
 
-        {/* Main node */}
-        <circle
-          cx={node.x}
-          cy={node.y}
-          r={getRadius(node)}
-          fill="#0f172a"
-          stroke={nodeColor}
-          strokeWidth="5"
-          filter={
-            isSelected
-              ? "url(#nodeGlow)"
-              : undefined
-          }
-        />
+                    <feMerge>
 
-        {/* Inner node */}
-        <circle
-          cx={node.x}
-          cy={node.y}
-          r={getRadius(node) - 9}
-          fill={nodeColor}
-          opacity="0.18"
-        />
+                      <feMergeNode
+                        in="blur"
+                      />
 
-        {/* Node icon */}
-        <text
-          x={node.x}
-          y={node.y + 8}
-          textAnchor="middle"
-          fontSize="22"
-          fontWeight="700"
-          fill="#ffffff"
-        >
-          {node.type === "Customer" ? "A" : "₹"}
-        </text>
+                      <feMergeNode
+                        in="SourceGraphic"
+                      />
 
-        {/* Node label */}
-        <text
-          x={node.x}
-          y={node.y + 65}
-          textAnchor="middle"
-          fill="#f8fafc"
-          fontSize="16"
-          fontWeight="600"
-        >
-          {node.label}
-        </text>
+                    </feMerge>
 
-        {/* Node type */}
-        <text
-          x={node.x}
-          y={node.y + 84}
-          textAnchor="middle"
-          fill="#94a3b8"
-          fontSize="12"
-        >
-          {node.type}
-        </text>
+                  </filter>
 
-        {/* Risk label */}
-        <text
-          x={node.x}
-          y={node.y - 48}
-          textAnchor="middle"
-          fill={nodeColor}
-          fontSize="11"
-          fontWeight="700"
-        >
-          {node.risk.toUpperCase()} RISK
-        </text>
-      </g>
-    );
-  })}
-</svg> 
+                  <pattern
+                    id="networkGrid"
+                    width="40"
+                    height="40"
+                    patternUnits="userSpaceOnUse"
+                  >
+
+                    <path
+                      d="M 40 0 L 0 0 0 40"
+                      fill="none"
+                      stroke="#334155"
+                      strokeWidth="1"
+                      opacity="0.25"
+                    />
+
+                  </pattern>
+
+                </defs>
+
+                {/* ==================================================
+                    BACKGROUND
+                ================================================== */}
+
+                <rect
+                  x="0"
+                  y="0"
+                  width="900"
+                  height="600"
+                  rx="18"
+                  fill="url(#networkBackground)"
+                />
+
+                <rect
+                  x="0"
+                  y="0"
+                  width="900"
+                  height="600"
+                  rx="18"
+                  fill="url(#networkGrid)"
+                />
+
+                {/* ==================================================
+                    CONNECTIONS
+                ================================================== */}
+
+                {connections.map(
+                  (
+                    connection,
+                    index
+                  ) => {
+
+                    const fromNode =
+                      getNode(
+                        connection.from
+                      );
+
+                    const toNode =
+                      getNode(
+                        connection.to
+                      );
+
+                    if (
+                      !fromNode ||
+                      !toNode
+                    ) {
+                      return null;
+                    }
+
+                    const searchMatch =
+                      isNodeSearchMatch(
+                        fromNode
+                      ) ||
+                      isNodeSearchMatch(
+                        toNode
+                      );
+
+                    const selectedConnection =
+                      selectedNode &&
+                      (
+                        safeString(
+                          connection.from
+                        ) ===
+                          safeString(
+                            selectedNode.id
+                          ) ||
+                        safeString(
+                          connection.to
+                        ) ===
+                          safeString(
+                            selectedNode.id
+                          )
+                      );
+
+                    return (
+                      <g
+                        key={
+                          connection.id ||
+                          `EDGE-${index}`
+                        }
+                      >
+
+                        <line
+                          x1={fromNode.x}
+                          y1={fromNode.y}
+                          x2={toNode.x}
+                          y2={toNode.y}
+                          stroke={
+                            selectedConnection
+                              ? "#38bdf8"
+                              : searchMatch
+                              ? "#facc15"
+                              : "#475569"
+                          }
+                          strokeWidth={
+                            selectedConnection ||
+                            searchMatch
+                              ? 5
+                              : 2.5
+                          }
+                          strokeLinecap="round"
+                          opacity={
+                            search &&
+                            !searchMatch
+                              ? 0.2
+                              : 0.85
+                          }
+                        />
+
+                        <circle
+                          cx={
+                            (fromNode.x +
+                              toNode.x) /
+                            2
+                          }
+                          cy={
+                            (fromNode.y +
+                              toNode.y) /
+                            2
+                          }
+                          r="4"
+                          fill={
+                            selectedConnection
+                              ? "#38bdf8"
+                              : "#64748b"
+                          }
+                        />
+
+                        <text
+                          x={
+                            (fromNode.x +
+                              toNode.x) /
+                            2
+                          }
+                          y={
+                            (fromNode.y +
+                              toNode.y) /
+                              2 -
+                            8
+                          }
+                          textAnchor="middle"
+                          fill="#94a3b8"
+                          fontSize="10"
+                          fontWeight="600"
+                        >
+                          {safeString(
+                            connection.label,
+                            "CONNECTED"
+                          )}
+                        </text>
+
+                      </g>
+                    );
+                  }
+                )}
+
+                {/* ==================================================
+                    NODES
+                ================================================== */}
+
+                {nodes.map(
+                  (
+                    node,
+                    index
+                  ) => {
+
+                    const visible =
+                      !search ||
+                      filteredNodeIds.has(
+                        node.id
+                      );
+
+                    if (!visible) {
+                      return null;
+                    }
+
+                    const selected =
+                      safeString(
+                        selectedNode?.id
+                      ) ===
+                      safeString(
+                        node.id
+                      );
+
+                    const searchMatch =
+                      isNodeSearchMatch(
+                        node
+                      );
+
+                    const nodeColor =
+                      getNodeColor(
+                        node
+                      );
+
+                    const radius =
+                      getRadius(
+                        node
+                      );
+
+                    return (
+                      <g
+                        key={
+                          node.id ||
+                          `NODE-${index}`
+                        }
+                        onClick={() =>
+                          setSelectedNode(
+                            node
+                          )
+                        }
+                        style={{
+                          cursor:
+                            "pointer",
+
+                          opacity:
+                            search &&
+                            !searchMatch
+                              ? 0.35
+                              : 1,
+                        }}
+                      >
+
+                        {/* Selected ring */}
+
+                        {selected && (
+                          <circle
+                            cx={node.x}
+                            cy={node.y}
+                            r={
+                              radius + 17
+                            }
+                            fill="none"
+                            stroke="#38bdf8"
+                            strokeWidth="4"
+                            filter="url(#nodeGlow)"
+                          />
+                        )}
+
+                        {/* Search ring */}
+
+                        {searchMatch && (
+                          <circle
+                            cx={node.x}
+                            cy={node.y}
+                            r={
+                              radius + 12
+                            }
+                            fill="none"
+                            stroke="#facc15"
+                            strokeWidth="3"
+                            strokeDasharray="7 5"
+                          />
+                        )}
+
+                        {/* Main node */}
+
+                        <circle
+                          cx={node.x}
+                          cy={node.y}
+                          r={radius}
+                          fill="#0f172a"
+                          stroke={nodeColor}
+                          strokeWidth="5"
+                          filter={
+                            selected
+                              ? "url(#nodeGlow)"
+                              : undefined
+                          }
+                        />
+
+                        {/* Inner glow */}
+
+                        <circle
+                          cx={node.x}
+                          cy={node.y}
+                          r={
+                            Math.max(
+                              radius - 9,
+                              1
+                            )
+                          }
+                          fill={nodeColor}
+                          opacity="0.18"
+                        />
+
+                        {/* Icon */}
+
+                        <text
+                          x={node.x}
+                          y={
+                            node.y + 8
+                          }
+                          textAnchor="middle"
+                          fontSize="21"
+                          fontWeight="700"
+                          fill="#ffffff"
+                        >
+                          {getNodeIcon(
+                            node.type
+                          )}
+                        </text>
+
+                        {/* Label */}
+
+                        <text
+                          x={node.x}
+                          y={
+                            node.y +
+                            radius +
+                            27
+                          }
+                          textAnchor="middle"
+                          fill="#f8fafc"
+                          fontSize="14"
+                          fontWeight="600"
+                        >
+                          {safeString(
+                            node.label,
+                            node.id
+                          )}
+                        </text>
+
+                        {/* Type */}
+
+                        <text
+                          x={node.x}
+                          y={
+                            node.y +
+                            radius +
+                            45
+                          }
+                          textAnchor="middle"
+                          fill="#94a3b8"
+                          fontSize="11"
+                        >
+                          {getDisplayType(
+                            node.type
+                          )}
+                        </text>
+
+                        {/* Risk */}
+
+                        <text
+                          x={node.x}
+                          y={
+                            node.y -
+                            radius -
+                            10
+                          }
+                          textAnchor="middle"
+                          fill={nodeColor}
+                          fontSize="10"
+                          fontWeight="700"
+                        >
+                          {getRiskLevel(
+                            node
+                          ).toUpperCase()}{" "}
+                          RISK
+                        </text>
+
+                      </g>
+                    );
+                  }
+                )}
+
+              </svg>
+            )}
 
           </div>
 
-          {/* =========================
+          {/* ==================================================
               LEGEND
-          ========================== */}
+          ================================================== */}
+
           <div className="network-legend">
 
             <span>
@@ -573,90 +1740,182 @@ function FraudNetwork() {
             </span>
 
             <span>
-              👤 Customer
+              👤 Account
             </span>
 
             <span>
               ₹ Transaction
             </span>
 
+            <span>
+              🏪 Merchant
+            </span>
+
+            <span>
+              📍 Location
+            </span>
+
           </div>
 
         </div>
 
-        {/* =========================
+        {/* ==================================================
             NODE DETAILS
-        ========================== */}
+        ================================================== */}
+
         <div className="investigation-panel network-details">
 
           <div className="panel-header">
-            <h3>Node Details</h3>
+
+            <h3>
+              Node Details
+            </h3>
+
           </div>
 
           {selectedNode ? (
-
             <div className="node-details-content">
 
               <div className="selected-node-icon">
-                {selectedNode.type === "Customer"
-                  ? "👤"
-                  : "₹"}
+                {getNodeIcon(
+                  selectedNode.type
+                )}
               </div>
 
               <h3>
-                {selectedNode.label}
+                {safeString(
+                  selectedNode.label,
+                  selectedNode.id
+                )}
               </h3>
 
               <p className="node-id">
-                {selectedNode.id}
+                {safeString(
+                  selectedNode.id
+                )}
               </p>
 
-              <div className="detail-row">
-                <span>Type</span>
-                <strong>
-                  {selectedNode.type}
-                </strong>
-              </div>
+              {/* Type */}
 
               <div className="detail-row">
-                <span>Risk</span>
+
+                <span>
+                  Type
+                </span>
+
+                <strong>
+                  {getDisplayType(
+                    selectedNode.type
+                  )}
+                </strong>
+
+              </div>
+
+              {/* Risk */}
+
+              <div className="detail-row">
+
+                <span>
+                  Risk
+                </span>
 
                 <strong
-                  className={`risk-text ${selectedNode.risk.toLowerCase()}`}
+                  className={`risk-text ${getRiskLevel(
+                    selectedNode
+                  ).toLowerCase()}`}
                 >
-                  {selectedNode.risk}
+                  {getRiskLevel(
+                    selectedNode
+                  )}
                 </strong>
+
               </div>
 
+              {/* Risk Score */}
+
               <div className="detail-row">
-                <span>Connections</span>
+
+                <span>
+                  Risk Score
+                </span>
+
+                <strong>
+                  {formatRiskScore(
+                    selectedNode
+                  )}
+                </strong>
+
+              </div>
+
+              {/* Fraud Label */}
+
+              {selectedNode.fraud_label !==
+                undefined &&
+                selectedNode.fraud_label !==
+                  null && (
+                  <div className="detail-row">
+
+                    <span>
+                      Fraud Label
+                    </span>
+
+                    <strong>
+                      {safeString(
+                        selectedNode.fraud_label
+                      )}
+                    </strong>
+
+                  </div>
+                )}
+
+              {/* Amount */}
+
+              {selectedNode.amount !==
+                undefined &&
+                selectedNode.amount !==
+                  null && (
+                  <div className="detail-row">
+
+                    <span>
+                      Amount
+                    </span>
+
+                    <strong>
+                      {formatAmount(
+                        selectedNode.amount
+                      )}
+                    </strong>
+
+                  </div>
+                )}
+
+              {/* Connections */}
+
+              <div className="detail-row">
+
+                <span>
+                  Connections
+                </span>
 
                 <strong>
                   {
-                    connections.filter(
-                      (connection) =>
-                        connection.from ===
-                          selectedNode.id ||
-                        connection.to ===
-                          selectedNode.id
-                    ).length
+                    selectedNodeConnections
                   }
                 </strong>
+
               </div>
 
               <button
                 className="secondary-btn"
-                onClick={() =>
-                  setSelectedNode(null)
+                onClick={
+                  clearSelection
                 }
               >
                 Clear Selection
               </button>
 
             </div>
-
           ) : (
-
             <div className="empty-node">
 
               <div className="empty-node-icon">
@@ -668,111 +1927,148 @@ function FraudNetwork() {
               </h3>
 
               <p>
-                Click any customer or transaction
-                in the network to view its details.
+                Click any account,
+                transaction, merchant
+                or location in the network
+                to view its details.
               </p>
 
             </div>
-
           )}
 
         </div>
 
       </div>
 
-      {/* =========================
+      {/* ==================================================
           SUSPICIOUS CONNECTIONS
-      ========================== */}
+      ================================================== */}
+
       <div className="investigation-panel suspicious-connections">
 
         <div className="panel-header">
 
           <div>
+
             <h3>
               Suspicious Connections
             </h3>
 
             <small>
-              Potential relationships requiring review
+              Potential relationships
+              requiring review
             </small>
+
           </div>
 
         </div>
 
         <div className="connection-list">
 
-          {connections.map((connection, index) => {
+          {loading ? (
+            <div className="no-investigations">
+              Loading connections...
+            </div>
+          ) : connections.length ===
+            0 ? (
+            <div className="no-investigations">
+              No connections found.
+            </div>
+          ) : (
+            connections.map(
+              (
+                connection,
+                index
+              ) => {
 
-            const fromNode =
-              getNode(connection.from);
+                const fromNode =
+                  getNode(
+                    connection.from
+                  );
 
-            const toNode =
-              getNode(connection.to);
+                const toNode =
+                  getNode(
+                    connection.to
+                  );
 
-            if (!fromNode || !toNode) {
-              return null;
-            }
+                if (
+                  !fromNode ||
+                  !toNode
+                ) {
+                  return null;
+                }
 
-            const connectionRisk =
-              fromNode.risk === "High" ||
-              toNode.risk === "High"
-                ? "High"
-                : fromNode.risk === "Medium" ||
-                  toNode.risk === "Medium"
-                ? "Medium"
-                : "Low";
+                const connectionRisk =
+                  getConnectionRisk(
+                    fromNode,
+                    toNode
+                  );
 
-            return (
-              <div
-                className="connection-item"
-                key={index}
-              >
+                return (
+                  <div
+                    className="connection-item"
+                    key={
+                      connection.id ||
+                      `connection-${index}`
+                    }
+                  >
 
-                <div className="connection-node">
+                    <div className="connection-node">
 
-                  <span>
-                    {fromNode.type === "Customer"
-                      ? "👤"
-                      : "₹"}
-                  </span>
+                      <span>
+                        {getNodeIcon(
+                          fromNode.type
+                        )}
+                      </span>
 
-                  <strong>
-                    {fromNode.label}
-                  </strong>
+                      <strong>
+                        {safeString(
+                          fromNode.label,
+                          fromNode.id
+                        )}
+                      </strong>
 
-                </div>
+                    </div>
 
-                <div className="connection-arrow">
-                  →
-                </div>
+                    <div className="connection-arrow">
+                      →
+                    </div>
 
-                <div className="connection-node">
+                    <div className="connection-node">
 
-                  <span>
-                    {toNode.type === "Customer"
-                      ? "👤"
-                      : "₹"}
-                  </span>
+                      <span>
+                        {getNodeIcon(
+                          toNode.type
+                        )}
+                      </span>
 
-                  <strong>
-                    {toNode.label}
-                  </strong>
+                      <strong>
+                        {safeString(
+                          toNode.label,
+                          toNode.id
+                        )}
+                      </strong>
 
-                </div>
+                    </div>
 
-                <div className="connection-type">
-                  {connection.label}
-                </div>
+                    <div className="connection-type">
+                      {safeString(
+                        connection.label,
+                        "CONNECTED"
+                      )}
+                    </div>
 
-                <span
-                  className={`risk-badge ${connectionRisk.toLowerCase()}`}
-                >
-                  {connectionRisk}
-                </span>
+                    <span
+                      className={`risk-badge ${connectionRisk.toLowerCase()}`}
+                    >
+                      {connectionRisk}
+                    </span>
 
-              </div>
-            );
-          })}
+                  </div>
+                );
+              }
+            )
+          )}
 
         </div>
 
