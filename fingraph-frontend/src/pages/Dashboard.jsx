@@ -1,7 +1,12 @@
-
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { getStats } from "../services/api";
 
 function Dashboard() {
+  const [stats, setStats] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
   const fraudData = [
     { time: "10 AM", value: 45 },
     { time: "11 AM", value: 65 },
@@ -67,6 +72,30 @@ function Dashboard() {
     },
   ];
 
+  // =========================================
+  // LOAD BACKEND STATISTICS
+  // =========================================
+
+  useEffect(() => {
+    const loadStats = async () => {
+      try {
+        setLoading(true);
+        setError("");
+
+        const data = await getStats();
+
+        setStats(data);
+      } catch (err) {
+        console.error("Dashboard API error:", err);
+        setError("Unable to connect to backend.");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadStats();
+  }, []);
+
   return (
     <div className="dashboard-page">
 
@@ -86,6 +115,16 @@ function Dashboard() {
       </header>
 
       {/* =========================================
+          API ERROR
+      ========================================= */}
+
+      {error && (
+        <div className="api-error">
+          ⚠️ {error}
+        </div>
+      )}
+
+      {/* =========================================
           STATISTICS
       ========================================= */}
 
@@ -93,26 +132,64 @@ function Dashboard() {
 
         <div className="stat-card">
           <span>🚨 Active Alerts</span>
+
           <h2>24</h2>
+
           <small>+12% today</small>
         </div>
 
         <div className="stat-card">
           <span>💳 Transactions</span>
-          <h2>12,840</h2>
-          <small>+8.4% today</small>
+
+          <h2>
+            {loading
+              ? "..."
+              : stats
+              ? Number(
+                  stats.total_transactions
+                ).toLocaleString()
+              : "—"}
+          </h2>
+
+          <small>
+            Total transactions
+          </small>
         </div>
 
         <div className="stat-card">
           <span>⚠️ Fraud Detected</span>
-          <h2>₹8.4L</h2>
-          <small>+5.2% today</small>
+
+          <h2>
+            {loading
+              ? "..."
+              : stats
+              ? Number(
+                  stats.fraud_transactions
+                ).toLocaleString()
+              : "—"}
+          </h2>
+
+          <small>
+            Fraud transactions
+          </small>
         </div>
 
         <div className="stat-card">
-          <span>🕸️ Suspicious Networks</span>
-          <h2>37</h2>
-          <small>3 new networks</small>
+          <span>🔴 High-Risk Transactions</span>
+
+          <h2>
+            {loading
+              ? "..."
+              : stats
+              ? Number(
+                  stats.high_risk_transactions
+                ).toLocaleString()
+              : "—"}
+          </h2>
+
+          <small>
+            Priority transactions
+          </small>
         </div>
 
       </section>

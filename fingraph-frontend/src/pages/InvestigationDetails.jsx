@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { getFraudAnalytics } from "../services/api";
 
 function InvestigationDetails() {
   const [status, setStatus] = useState("Under Investigation");
   const [note, setNote] = useState("");
 
-  const investigation = {
+  const [investigation, setInvestigation] = useState({
     id: "INV-1024",
     transactionId: "TXN-78421",
     customer: "Customer A",
@@ -14,7 +15,169 @@ function InvestigationDetails() {
     risk: "Critical",
     reason: "Unusual high-value transaction",
     analyst: "Analyst",
+  });
+
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  // =========================
+  // FORMAT AMOUNT
+  // =========================
+  const formatAmount = (amount, currency = "INR") => {
+    const numericAmount = Number(amount);
+
+    if (Number.isNaN(numericAmount)) {
+      return amount || "-";
+    }
+
+    if (currency === "INR") {
+      return `₹${numericAmount.toLocaleString("en-IN")}`;
+    }
+
+    return `${currency} ${numericAmount.toLocaleString()}`;
   };
+
+  // =========================
+  // GET RISK LEVEL
+  // =========================
+  const getRiskLevel = (riskIndex) => {
+    const value = Number(riskIndex);
+
+    if (Number.isNaN(value)) {
+      return "Medium";
+    }
+
+    if (value >= 0.8) {
+      return "Critical";
+    }
+
+    if (value >= 0.7) {
+      return "High";
+    }
+
+    if (value >= 0.4) {
+      return "Medium";
+    }
+
+    return "Low";
+  };
+
+  // =========================
+  // GET REASON
+  // =========================
+  const getReason = (transaction, risk) => {
+    const fraudLabel = String(
+      transaction.fraud_label || ""
+    ).toLowerCase();
+
+    if (fraudLabel.includes("fraud")) {
+      return "Fraudulent transaction detected";
+    }
+
+    if (fraudLabel.includes("suspicious")) {
+      return "Suspicious transaction detected";
+    }
+
+    if (risk === "Critical" || risk === "High") {
+      return "High-risk transaction requires investigation";
+    }
+
+    return "Transaction flagged for review";
+  };
+
+  // =========================
+  // LOAD INVESTIGATION DATA
+  // =========================
+  useEffect(() => {
+    const loadInvestigation = async () => {
+      try {
+        setLoading(true);
+        setError("");
+
+        const response = await getFraudAnalytics(50);
+
+        let transactions = [];
+
+        if (Array.isArray(response)) {
+          transactions = response;
+        } else if (Array.isArray(response?.data)) {
+          transactions = response.data;
+        } else if (
+          Array.isArray(response?.transactions)
+        ) {
+          transactions = response.transactions;
+        } else if (
+          Array.isArray(response?.results)
+        ) {
+          transactions = response.results;
+        }
+
+        if (transactions.length === 0) {
+          return;
+        }
+
+        // Use the first backend transaction.
+        // The existing page does not receive an
+        // investigation/transaction ID through routing.
+        const transaction = transactions[0];
+
+        const risk = getRiskLevel(
+          transaction.risk_index
+        );
+
+        setInvestigation({
+          id: "INV-1024",
+
+          transactionId:
+            transaction.txn_id ||
+            transaction.transaction_id ||
+            "N/A",
+
+          customer:
+            transaction.customer_name ||
+            transaction.account_id ||
+            "Unknown Customer",
+
+          account:
+            transaction.account_id ||
+            "N/A",
+
+          amount: formatAmount(
+            transaction.amount,
+            transaction.currency
+          ),
+
+          date:
+            transaction.date ||
+            transaction.transaction_date ||
+            transaction.created_at ||
+            "N/A",
+
+          risk,
+
+          reason: getReason(
+            transaction,
+            risk
+          ),
+
+          analyst: "Analyst",
+        });
+      } catch (err) {
+        console.error(
+          "Error loading investigation details:",
+          err
+        );
+
+        setError(
+          "Unable to load investigation details from backend."
+        );
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadInvestigation();
+  }, []);
 
   const handleResolve = () => {
     setStatus("Resolved");
@@ -40,13 +203,40 @@ function InvestigationDetails() {
           </p>
         </div>
 
-        <span className={`investigation-status ${status
-          .toLowerCase()
-          .replaceAll(" ", "-")}`}>
+        <span
+          className={`investigation-status ${status
+            .toLowerCase()
+            .replaceAll(" ", "-")}`}
+        >
           {status}
         </span>
 
       </div>
+
+      {/* API Loading / Error */}
+      {loading && (
+        <div className="investigation-panel">
+          <div className="panel-header">
+            <div>
+              <h3>Loading Investigation</h3>
+              <small>
+                Fetching transaction details from backend...
+              </small>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {error && !loading && (
+        <div className="investigation-panel">
+          <div className="panel-header">
+            <div>
+              <h3>Unable to Load Data</h3>
+              <small>{error}</small>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Case Overview */}
       <div className="investigation-stats">
@@ -119,7 +309,9 @@ function InvestigationDetails() {
 
             <div className="detail-row">
               <span>Risk</span>
-              <span className="risk-badge critical">
+              <span
+                className={`risk-badge ${investigation.risk.toLowerCase()}`}
+              >
                 {investigation.risk}
               </span>
             </div>
@@ -149,7 +341,9 @@ function InvestigationDetails() {
 
             <select
               value={status}
-              onChange={(e) => setStatus(e.target.value)}
+              onChange={(e) =>
+                setStatus(e.target.value)
+              }
               className="transaction-filter"
             >
               <option>Under Investigation</option>
@@ -176,7 +370,9 @@ function InvestigationDetails() {
         <div className="panel-header">
           <div>
             <h3>Investigation Notes</h3>
-            <small>Add observations or investigation findings</small>
+            <small>
+              Add observations or investigation findings
+            </small>
           </div>
         </div>
 
@@ -184,7 +380,9 @@ function InvestigationDetails() {
           className="investigation-notes"
           placeholder="Enter investigation notes..."
           value={note}
-          onChange={(e) => setNote(e.target.value)}
+          onChange={(e) =>
+            setNote(e.target.value)
+          }
         />
 
         <button

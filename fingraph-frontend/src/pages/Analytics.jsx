@@ -1,88 +1,307 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import {
+  getFraudAnalytics,
+  getRiskDistribution,
+} from "../services/api";
 
 function Analytics() {
   const [search, setSearch] = useState("");
   const [riskFilter, setRiskFilter] = useState("All");
 
-  const transactions = [
-    {
-      id: "TXN-78421",
-      customer: "Customer A",
-      amount: "₹2.4L",
-      risk: "High",
-      status: "Fraud",
-    },
-    {
-      id: "TXN-78435",
-      customer: "Customer B",
-      amount: "₹85K",
-      risk: "Medium",
-      status: "Review",
-    },
-    {
-      id: "TXN-78456",
-      customer: "Customer C",
-      amount: "₹42K",
-      risk: "Low",
-      status: "Safe",
-    },
-    {
-      id: "TXN-78472",
-      customer: "Customer D",
-      amount: "₹1.8L",
-      risk: "High",
-      status: "Fraud",
-    },
-    {
-      id: "TXN-78489",
-      customer: "Customer E",
-      amount: "₹65K",
-      risk: "Medium",
-      status: "Review",
-    },
-    {
-      id: "TXN-78501",
-      customer: "Customer F",
-      amount: "₹28K",
-      risk: "Low",
-      status: "Safe",
-    },
-  ];
+  // =========================================
+  // BACKEND DATA
+  // =========================================
 
-  const filteredTransactions = transactions.filter((item) => {
-    const matchesSearch =
-      item.id.toLowerCase().includes(search.toLowerCase()) ||
-      item.customer.toLowerCase().includes(search.toLowerCase());
+  const [transactions, setTransactions] = useState([]);
+  const [riskData, setRiskData] = useState(null);
 
-    const matchesRisk =
-      riskFilter === "All" || item.risk === riskFilter;
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-    return matchesSearch && matchesRisk;
-  });
+  // =========================================
+  // LOAD ANALYTICS DATA
+  // =========================================
 
-  const highRisk = transactions.filter(
-    (item) => item.risk === "High"
-  ).length;
+  useEffect(() => {
+    const loadAnalytics = async () => {
+      try {
+        setLoading(true);
+        setError("");
 
-  const mediumRisk = transactions.filter(
-    (item) => item.risk === "Medium"
-  ).length;
+        const [fraudResponse, riskResponse] =
+          await Promise.all([
+            getFraudAnalytics(50),
+            getRiskDistribution(),
+          ]);
 
-  const lowRisk = transactions.filter(
-    (item) => item.risk === "Low"
-  ).length;
+        // =====================================
+        // FRAUD ANALYTICS
+        // =====================================
 
-  const fraudTransactions = transactions.filter(
-    (item) => item.status === "Fraud"
-  ).length;
+        const backendTransactions =
+          fraudResponse?.transactions || [];
+
+        const formattedTransactions =
+          backendTransactions.map((item) => {
+            const riskIndex = Number(
+              item.risk_index || 0
+            );
+
+            let risk = "Low";
+
+            if (riskIndex >= 0.7) {
+              risk = "High";
+            } else if (riskIndex >= 0.4) {
+              risk = "Medium";
+            }
+
+            const fraudLabel = String(
+              item.fraud_label || ""
+            ).toLowerCase();
+
+            let status = "Safe";
+
+            if (
+              fraudLabel === "fraud" ||
+              fraudLabel === "suspicious"
+            ) {
+              status = "Fraud";
+            } else if (
+              fraudLabel === "review"
+            ) {
+              status = "Review";
+            }
+
+            return {
+              id:
+                item.txn_id ||
+                item.id ||
+                "Unknown",
+
+              customer:
+                item.account_id ||
+                item.customer ||
+                "Unknown",
+
+              amount:
+                `${item.currency || "₹"}${Number(
+                  item.amount || 0
+                ).toLocaleString("en-IN", {
+                  maximumFractionDigits: 2,
+                })}`,
+
+              risk,
+
+              status,
+
+              channel:
+                item.channel || "Unknown",
+
+              riskIndex,
+
+              fraudLabel,
+            };
+          });
+
+        setTransactions(
+          formattedTransactions
+        );
+
+        // =====================================
+        // RISK DISTRIBUTION
+        // =====================================
+
+        setRiskData(riskResponse);
+
+      } catch (err) {
+        console.error(
+          "Analytics API error:",
+          err
+        );
+
+        setError(
+          "Unable to load analytics from backend."
+        );
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadAnalytics();
+  }, []);
+
+  // =========================================
+  // RISK DISTRIBUTION
+  // =========================================
+
+  const riskDistribution =
+    riskData?.distribution || [];
+
+  const findRiskData = (riskName) => {
+    if (!Array.isArray(riskDistribution)) {
+      return null;
+    }
+
+    return riskDistribution.find((item) => {
+      const level = String(
+        item.risk_level || ""
+      ).toLowerCase();
+
+      return level.includes(
+        riskName.toLowerCase()
+      );
+    });
+  };
+
+  const highRiskData =
+    findRiskData("High");
+
+  const mediumRiskData =
+    findRiskData("Medium");
+
+  const lowRiskData =
+    findRiskData("Low");
+
+  const highRisk = Number(
+    highRiskData?.transaction_count || 0
+  );
+
+  const mediumRisk = Number(
+    mediumRiskData?.transaction_count || 0
+  );
+
+  const lowRisk = Number(
+    lowRiskData?.transaction_count || 0
+  );
+
+  // =========================================
+  // TOTAL TRANSACTIONS
+  // =========================================
+
+  const totalTransactions = Number(
+    riskData?.total_transactions ||
+      highRisk +
+        mediumRisk +
+        lowRisk
+  );
+
+  // =========================================
+  // FRAUD TRANSACTIONS
+  // =========================================
+
+  const fraudTransactions =
+    transactions.filter(
+      (item) =>
+        item.status === "Fraud"
+    ).length;
+
+  // =========================================
+  // REVIEW TRANSACTIONS
+  // =========================================
+
+  const reviewTransactions =
+    transactions.filter(
+      (item) =>
+        item.status === "Review"
+    ).length;
+
+  // =========================================
+  // SAFE TRANSACTIONS
+  // =========================================
+
+  const safeTransactions =
+    transactions.filter(
+      (item) =>
+        item.status === "Safe"
+    ).length;
+
+  // =========================================
+  // SEARCH + FILTER
+  // =========================================
+
+  const filteredTransactions =
+    transactions.filter((item) => {
+      const searchText =
+        search.toLowerCase().trim();
+
+      const matchesSearch =
+        item.id
+          .toLowerCase()
+          .includes(searchText) ||
+        item.customer
+          .toLowerCase()
+          .includes(searchText) ||
+        item.channel
+          .toLowerCase()
+          .includes(searchText);
+
+      const matchesRisk =
+        riskFilter === "All" ||
+        item.risk === riskFilter;
+
+      return (
+        matchesSearch &&
+        matchesRisk
+      );
+    });
+
+  // =========================================
+  // FRAUD RATE
+  // =========================================
+
+  const fraudRate =
+    totalTransactions > 0
+      ? Math.round(
+          (fraudTransactions /
+            totalTransactions) *
+            100
+        )
+      : 0;
+
+  // =========================================
+  // RISK PERCENTAGES
+  // =========================================
+
+  const highRiskPercentage =
+    highRiskData?.percentage ??
+    (totalTransactions > 0
+      ? (highRisk /
+          totalTransactions) *
+        100
+      : 0);
+
+  const mediumRiskPercentage =
+    mediumRiskData?.percentage ??
+    (totalTransactions > 0
+      ? (mediumRisk /
+          totalTransactions) *
+        100
+      : 0);
+
+  const lowRiskPercentage =
+    lowRiskData?.percentage ??
+    (totalTransactions > 0
+      ? (lowRisk /
+          totalTransactions) *
+        100
+      : 0);
+
+  // =========================================
+  // RETURN UI
+  // =========================================
 
   return (
     <div className="page-container">
 
-      {/* PAGE HEADER */}
+      {/* =====================================
+          PAGE HEADER
+      ====================================== */}
+
       <div className="page-header">
+
         <div>
           <h2>Fraud Analytics</h2>
+
           <p>
             Analyze transaction patterns, fraud trends, and risk metrics.
           </p>
@@ -93,179 +312,362 @@ function Analytics() {
           placeholder="Search transaction..."
           className="search-input"
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) =>
+            setSearch(e.target.value)
+          }
         />
+
       </div>
 
-      {/* SUMMARY CARDS */}
+      {/* =====================================
+          API ERROR
+      ====================================== */}
+
+      {error && (
+        <div className="api-error">
+          ⚠️ {error}
+        </div>
+      )}
+
+      {/* =====================================
+          SUMMARY CARDS
+      ====================================== */}
+
       <div className="investigation-stats">
 
         <div className="info-card">
-          <span>💳 Total Transactions</span>
-          <h3>{transactions.length}</h3>
-          <small>Analyzed transactions</small>
-        </div>
 
-        <div className="info-card">
-          <span>🚨 Fraud Transactions</span>
-          <h3>{fraudTransactions}</h3>
-          <small>Detected fraud cases</small>
-        </div>
+          <span>
+            💳 Total Transactions
+          </span>
 
-        <div className="info-card">
-          <span>⚠️ High Risk</span>
-          <h3>{highRisk}</h3>
-          <small>Priority transactions</small>
-        </div>
-
-        <div className="info-card">
-          <span>📊 Fraud Rate</span>
           <h3>
-            {Math.round(
-              (fraudTransactions / transactions.length) * 100
-            )}%
+            {loading
+              ? "..."
+              : totalTransactions.toLocaleString()}
           </h3>
-          <small>Current fraud rate</small>
+
+          <small>
+            Analyzed transactions
+          </small>
+
+        </div>
+
+        <div className="info-card">
+
+          <span>
+            🚨 Fraud Transactions
+          </span>
+
+          <h3>
+            {loading
+              ? "..."
+              : fraudTransactions.toLocaleString()}
+          </h3>
+
+          <small>
+            Detected fraud cases
+          </small>
+
+        </div>
+
+        <div className="info-card">
+
+          <span>
+            ⚠️ High Risk
+          </span>
+
+          <h3>
+            {loading
+              ? "..."
+              : highRisk.toLocaleString()}
+          </h3>
+
+          <small>
+            Priority transactions
+          </small>
+
+        </div>
+
+        <div className="info-card">
+
+          <span>
+            📊 Fraud Rate
+          </span>
+
+          <h3>
+            {loading
+              ? "..."
+              : `${fraudRate}%`}
+          </h3>
+
+          <small>
+            Current fraud rate
+          </small>
+
         </div>
 
       </div>
 
-      {/* ANALYTICS SECTION */}
+      {/* =====================================
+          ANALYTICS SECTION
+      ====================================== */}
+
       <div className="analytics-grid">
 
-        {/* RISK DISTRIBUTION */}
+        {/* ===================================
+            RISK DISTRIBUTION
+        ==================================== */}
+
         <div className="investigation-panel analytics-card">
 
           <div className="panel-header">
+
             <div>
-              <h3>Risk Distribution</h3>
-              <small>Transaction risk overview</small>
+
+              <h3>
+                Risk Distribution
+              </h3>
+
+              <small>
+                Transaction risk overview
+              </small>
+
             </div>
+
           </div>
 
           <div className="risk-chart">
 
+            {/* HIGH RISK */}
+
             <div className="risk-bar-row">
+
               <div className="risk-bar-label">
-                <span>High Risk</span>
-                <strong>{highRisk}</strong>
+
+                <span>
+                  High Risk
+                </span>
+
+                <strong>
+                  {loading
+                    ? "..."
+                    : highRisk}
+                </strong>
+
               </div>
 
               <div className="risk-bar">
+
                 <div
                   className="risk-bar-fill high"
                   style={{
-                    width: `${(highRisk / transactions.length) * 100}%`,
+                    width: `${highRiskPercentage}%`,
                   }}
                 ></div>
+
               </div>
+
             </div>
 
+            {/* MEDIUM RISK */}
+
             <div className="risk-bar-row">
+
               <div className="risk-bar-label">
-                <span>Medium Risk</span>
-                <strong>{mediumRisk}</strong>
+
+                <span>
+                  Medium Risk
+                </span>
+
+                <strong>
+                  {loading
+                    ? "..."
+                    : mediumRisk}
+                </strong>
+
               </div>
 
               <div className="risk-bar">
+
                 <div
                   className="risk-bar-fill medium"
                   style={{
-                    width: `${(mediumRisk / transactions.length) * 100}%`,
+                    width: `${mediumRiskPercentage}%`,
                   }}
                 ></div>
+
               </div>
+
             </div>
 
+            {/* LOW RISK */}
+
             <div className="risk-bar-row">
+
               <div className="risk-bar-label">
-                <span>Low Risk</span>
-                <strong>{lowRisk}</strong>
+
+                <span>
+                  Low Risk
+                </span>
+
+                <strong>
+                  {loading
+                    ? "..."
+                    : lowRisk}
+                </strong>
+
               </div>
 
               <div className="risk-bar">
+
                 <div
                   className="risk-bar-fill low"
                   style={{
-                    width: `${(lowRisk / transactions.length) * 100}%`,
+                    width: `${lowRiskPercentage}%`,
                   }}
                 ></div>
+
               </div>
+
             </div>
 
           </div>
+
         </div>
 
-        {/* FRAUD OVERVIEW */}
+        {/* ===================================
+            FRAUD OVERVIEW
+        ==================================== */}
+
         <div className="investigation-panel analytics-card">
 
           <div className="panel-header">
+
             <div>
-              <h3>Fraud Overview</h3>
-              <small>Current detection summary</small>
+
+              <h3>
+                Fraud Overview
+              </h3>
+
+              <small>
+                Current detection summary
+              </small>
+
             </div>
+
           </div>
 
           <div className="analytics-overview">
 
             <div className="overview-item">
-              <span>Detected Fraud</span>
-              <strong>{fraudTransactions}</strong>
-            </div>
 
-            <div className="overview-item">
-              <span>High Risk</span>
-              <strong>{highRisk}</strong>
-            </div>
+              <span>
+                Detected Fraud
+              </span>
 
-            <div className="overview-item">
-              <span>Requires Review</span>
               <strong>
-                {
-                  transactions.filter(
-                    (item) => item.status === "Review"
-                  ).length
-                }
+                {loading
+                  ? "..."
+                  : fraudTransactions}
               </strong>
+
             </div>
 
             <div className="overview-item">
-              <span>Safe Transactions</span>
+
+              <span>
+                High Risk
+              </span>
+
               <strong>
-                {
-                  transactions.filter(
-                    (item) => item.status === "Safe"
-                  ).length
-                }
+                {loading
+                  ? "..."
+                  : highRisk}
               </strong>
+
+            </div>
+
+            <div className="overview-item">
+
+              <span>
+                Requires Review
+              </span>
+
+              <strong>
+                {loading
+                  ? "..."
+                  : reviewTransactions}
+              </strong>
+
+            </div>
+
+            <div className="overview-item">
+
+              <span>
+                Safe Transactions
+              </span>
+
+              <strong>
+                {loading
+                  ? "..."
+                  : safeTransactions}
+              </strong>
+
             </div>
 
           </div>
+
         </div>
 
       </div>
 
-      {/* TRANSACTION TABLE */}
+      {/* =====================================
+          TRANSACTION TABLE
+      ====================================== */}
+
       <div className="investigation-panel analytics-table-panel">
 
         <div className="panel-header">
 
           <div>
-            <h3>Transaction Analytics</h3>
+
+            <h3>
+              Transaction Analytics
+            </h3>
+
             <small>
               Detailed transaction risk analysis
             </small>
+
           </div>
 
           <select
             className="analytics-filter"
             value={riskFilter}
-            onChange={(e) => setRiskFilter(e.target.value)}
+            onChange={(e) =>
+              setRiskFilter(
+                e.target.value
+              )
+            }
           >
-            <option value="All">All Risk</option>
-            <option value="High">High Risk</option>
-            <option value="Medium">Medium Risk</option>
-            <option value="Low">Low Risk</option>
+
+            <option value="All">
+              All Risk
+            </option>
+
+            <option value="High">
+              High Risk
+            </option>
+
+            <option value="Medium">
+              Medium Risk
+            </option>
+
+            <option value="Low">
+              Low Risk
+            </option>
+
           </select>
 
         </div>
@@ -275,51 +677,111 @@ function Analytics() {
           <table>
 
             <thead>
+
               <tr>
-                <th>Transaction ID</th>
-                <th>Customer</th>
-                <th>Amount</th>
-                <th>Risk</th>
-                <th>Status</th>
+
+                <th>
+                  Transaction ID
+                </th>
+
+                <th>
+                  Customer
+                </th>
+
+                <th>
+                  Amount
+                </th>
+
+                <th>
+                  Risk
+                </th>
+
+                <th>
+                  Status
+                </th>
+
               </tr>
+
             </thead>
 
             <tbody>
 
-              {filteredTransactions.length > 0 ? (
-                filteredTransactions.map((item) => (
-                  <tr key={item.id}>
+              {loading ? (
 
-                    <td>{item.id}</td>
-
-                    <td>{item.customer}</td>
-
-                    <td>{item.amount}</td>
-
-                    <td>
-                      <span
-                        className={`risk-badge ${item.risk.toLowerCase()}`}
-                      >
-                        {item.risk}
-                      </span>
-                    </td>
-
-                    <td>
-                      <span
-                        className={`analytics-status ${item.status.toLowerCase()}`}
-                      >
-                        {item.status}
-                      </span>
-                    </td>
-
-                  </tr>
-                ))
-              ) : (
                 <tr>
-                  <td colSpan="5" className="no-results">
+
+                  <td
+                    colSpan="5"
+                    style={{
+                      textAlign:
+                        "center",
+                      padding: "20px",
+                    }}
+                  >
+                    Loading analytics...
+                  </td>
+
+                </tr>
+
+              ) : filteredTransactions.length >
+                0 ? (
+
+                filteredTransactions.map(
+                  (item) => (
+
+                    <tr key={item.id}>
+
+                      <td>
+                        {item.id}
+                      </td>
+
+                      <td>
+                        {item.customer}
+                      </td>
+
+                      <td>
+                        {item.amount}
+                      </td>
+
+                      <td>
+
+                        <span
+                          className={`risk-badge ${item.risk.toLowerCase()}`}
+                        >
+                          {item.risk}
+                        </span>
+
+                      </td>
+
+                      <td>
+
+                        <span
+                          className={`analytics-status ${item.status.toLowerCase()}`}
+                        >
+                          {item.status}
+                        </span>
+
+                      </td>
+
+                    </tr>
+
+                  )
+
+                )
+
+              ) : (
+
+                <tr>
+
+                  <td
+                    colSpan="5"
+                    className="no-results"
+                  >
                     No transactions found.
                   </td>
+
                 </tr>
+
               )}
 
             </tbody>
