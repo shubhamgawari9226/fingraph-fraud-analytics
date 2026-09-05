@@ -80,6 +80,24 @@ class ApiInfoResponse(BaseModel):
     total_endpoints: int
     endpoints: list[ApiEndpoint]
 
+    # =========================
+# Week 4 Day 2 - Automated Alert Models
+# =========================
+
+class AutomatedAlert(BaseModel):
+    alert_id: str
+    txn_id: str
+    account_id: str
+    risk_index: float
+    severity: str
+    message: str
+
+
+class AutomatedAlertResponse(BaseModel):
+    count: int
+    threshold: float
+    alerts: list[AutomatedAlert]
+
 
 # Day 8 - Fraud Analytics Models
 class FraudTransaction(BaseModel):
@@ -1655,6 +1673,78 @@ def get_dashboard_analytics():
             detail=str(e)
         )
 
+
+# =========================
+# Week 4 Day 2 - Automated Alerts API
+# =========================
+
+@app.get("/automated-alerts", response_model=AutomatedAlertResponse)
+def get_automated_alerts(
+    min_risk: float = 0.80,
+    limit: int = 20
+):
+    try:
+        with driver.session() as session:
+
+            result = session.run(
+                """
+                MATCH (a:Account)-[:MADE]->(t:Transaction)
+
+                WHERE t.risk_index >= $min_risk
+
+                RETURN
+                    t.txn_id AS txn_id,
+                    a.account_id AS account_id,
+                    t.risk_index AS risk_index
+
+                ORDER BY t.risk_index DESC
+
+                LIMIT $limit
+                """,
+                min_risk=min_risk,
+                limit=limit
+            )
+
+            alerts = []
+
+            for record in result:
+
+                risk_index = float(record["risk_index"])
+
+                if risk_index >= 0.90:
+                    severity = "CRITICAL"
+                elif risk_index >= 0.80:
+                    severity = "HIGH"
+                else:
+                    severity = "MEDIUM"
+
+                alert = {
+                    "alert_id": f"ALERT-{record['txn_id']}",
+                    "txn_id": record["txn_id"],
+                    "account_id": record["account_id"],
+                    "risk_index": risk_index,
+                    "severity": severity,
+                    "message": (
+                        f"{severity} risk transaction detected "
+                        f"for account {record['account_id']}"
+                    )
+                }
+
+                alerts.append(alert)
+
+            return {
+                "count": len(alerts),
+                "threshold": min_risk,
+                "alerts": alerts
+            }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unable to generate automated alerts: {str(e)}"
+        )
+
+
 # =========================
 # Alert & Notification System API
 # =========================
@@ -1753,6 +1843,8 @@ def get_alert_notifications(
             status_code=500,
             detail=str(e)
         )
+
+
 # =========================
 # Day 17 + Day 20 - Alert Notification Summary API
 # =========================
@@ -1833,6 +1925,8 @@ def get_alert_notification_summary():
             status_code=500,
             detail=str(e)
         )
+
+
 # =========================
 # Day 18 - Account Risk Scores API
 # =========================
@@ -1889,6 +1983,7 @@ def get_account_risk_scores(
             detail=str(e)
         )
 
+
 # =========================
 # Day 19 - Alert Acknowledgement API
 # =========================
@@ -1936,18 +2031,20 @@ def acknowledge_alert(txn_id: str):
             detail=str(e)
         )
 
+
 # =========================
-# Fraud Network API
+# Day 4 - Fraud Network API
 # =========================
 
 @app.get("/fraud-network")
-def get_fraud_network(limit: int = 50):
+def get_fraud_network(limit: int = 100):
     try:
         with driver.session() as session:
 
             result = session.run(
                 """
                 MATCH (a:Account)-[:MADE]->(t:Transaction)
+
                 OPTIONAL MATCH (t)-[:AT_MERCHANT]->(m:Merchant)
                 OPTIONAL MATCH (t)-[:OCCURRED_IN]->(l:Location)
 
@@ -1957,10 +2054,13 @@ def get_fraud_network(limit: int = 50):
                     a.account_id AS account_id,
                     a.risk_score AS account_risk_score,
                     a.risk_tier AS account_risk_tier,
+
                     t.txn_id AS txn_id,
-                    t.risk_index AS risk_index,
-                    t.fraud_label AS fraud_label,
                     t.txn_amount AS amount,
+                    t.txn_currency AS currency,
+                    t.fraud_label AS fraud_label,
+                    t.risk_index AS risk_index,
+
                     m.merchant_type AS merchant_type,
                     l.city AS city
 
@@ -1970,88 +2070,87 @@ def get_fraud_network(limit: int = 50):
                 limit=limit
             )
 
-            nodes = []
-            edges = []
-            seen_nodes = set()
+            records = [dict(record) for record in result]
 
-            for record in result:
+            nodes = {}
+            edges = []
+
+            for record in records:
 
                 account_id = record["account_id"]
                 txn_id = record["txn_id"]
-                merchant_type = record["merchant_type"]
-                city = record["city"]
 
                 # Account node
-                account_node_id = f"account:{account_id}"
+                if account_id not in nodes:
+                    risk_score = record["account_risk_score"]
 
-                if account_node_id not in seen_nodes:
-                    nodes.append({
-                        "id": account_node_id,
-                        "type": "account",
+                    if risk_score is None:
+                        risk_tier = "UNKNOWN"
+                    elif risk_score >= 80:
+                        risk_tier = "CRITICAL"
+                    elif risk_score >= 60:
+                        risk_tier = "HIGH"
+                    elif risk_score >= 30:
+                        risk_tier = "MEDIUM"
+                    else:
+                        risk_tier = "LOW"
+
+                    nodes[account_id] = {
+                        "id": account_id,
                         "label": account_id,
-                        "risk_score": record["account_risk_score"],
-                        "risk_tier": record["account_risk_tier"]
-                    })
-                    seen_nodes.add(account_node_id)
+                        "type": "Account",
+                        "risk": risk_tier,
+                        "risk_score": risk_score,
+                        "risk_tier": risk_tier
+                    }
 
                 # Transaction node
-                txn_node_id = f"transaction:{txn_id}"
+                if txn_id not in nodes:
 
-                if txn_node_id not in seen_nodes:
-                    nodes.append({
-                        "id": txn_node_id,
-                        "type": "transaction",
-                        "label": txn_id,
-                        "risk_index": record["risk_index"],
+                    risk_index = float(
+                        record["risk_index"] or 0
+                    )
+
+                    if risk_index >= 0.90:
+                        risk = "CRITICAL"
+                    elif risk_index >= 0.80:
+                        risk = "HIGH"
+                    elif risk_index >= 0.40:
+                        risk = "MEDIUM"
+                    else:
+                        risk = "LOW"
+
+                    nodes[txn_id] = {
+                        "id": txn_id,
+                        "label": (
+                            f"{record['currency'] or '₹'}"
+                            f"{record['amount'] or 0}"
+                        ),
+                        "type": "Transaction",
+                        "risk": risk,
+                        "risk_index": risk_index,
                         "fraud_label": record["fraud_label"],
-                        "amount": record["amount"]
-                    })
-                    seen_nodes.add(txn_node_id)
+                        "amount": record["amount"],
+                        "currency": record["currency"],
+                        "merchant_type": record["merchant_type"],
+                        "city": record["city"]
+                    }
 
+                # Account -> Transaction relationship
                 edges.append({
-                    "source": account_node_id,
-                    "target": txn_node_id,
+                    "from": account_id,
+                    "to": txn_id,
+                    "source": account_id,
+                    "target": txn_id,
+                    "label": "MADE",
                     "relationship": "MADE"
                 })
 
-                # Merchant node
-                if merchant_type:
-                    merchant_node_id = f"merchant:{merchant_type}"
-
-                    if merchant_node_id not in seen_nodes:
-                        nodes.append({
-                            "id": merchant_node_id,
-                            "type": "merchant",
-                            "label": merchant_type
-                        })
-                        seen_nodes.add(merchant_node_id)
-
-                    edges.append({
-                        "source": txn_node_id,
-                        "target": merchant_node_id,
-                        "relationship": "AT_MERCHANT"
-                    })
-
-                # Location node
-                if city:
-                    location_node_id = f"location:{city}"
-
-                    if location_node_id not in seen_nodes:
-                        nodes.append({
-                            "id": location_node_id,
-                            "type": "location",
-                            "label": city
-                        })
-                        seen_nodes.add(location_node_id)
-
-                    edges.append({
-                        "source": txn_node_id,
-                        "target": location_node_id,
-                        "relationship": "OCCURRED_IN"
-                    })
-
             return {
-                "nodes": nodes,
+                "source": "Neo4j",
+                "synthetic": False,
+                "count": len(nodes),
+                "nodes": list(nodes.values()),
                 "edges": edges,
                 "stats": {
                     "total_nodes": len(nodes),
@@ -2062,5 +2161,5 @@ def get_fraud_network(limit: int = 50):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=str(e)
+            detail=f"Unable to load fraud network: {str(e)}"
         )
